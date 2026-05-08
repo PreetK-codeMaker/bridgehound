@@ -1,4 +1,4 @@
-import type { Address, Hash, Hex } from 'viem'
+import type { Address, Log } from 'viem'
 import type { CacheAdapter } from '../cache/types.js'
 import type { ProviderRegistry } from '../chains/providers.js'
 import type { BridgeSend, ChainId, NormalizedTx } from '../types.js'
@@ -6,17 +6,6 @@ import type { BridgeSend, ChainId, NormalizedTx } from '../types.js'
 export interface AdapterContext {
   providers: ProviderRegistry
   cache: CacheAdapter
-}
-
-export interface DecodedLog {
-  address: Address
-  topics: readonly Hash[]
-  data: Hex
-  /** Convenience: pre-decoded args if the caller recognized the event. */
-  decoded?: {
-    eventName: string
-    args: Record<string, unknown>
-  }
 }
 
 export interface BridgeAdapter {
@@ -28,13 +17,17 @@ export interface BridgeAdapter {
 
   /**
    * Decode a source-side transaction into a BridgeSend.
-   * Returns null if the call isn't a bridge send (e.g. an admin function).
+   * Returns null if the call isn't a bridge send (admin function, refund, …).
+   * Adapters receive the raw viem.Log[] and own their own decoding so they
+   * can use blockNumber/transactionIndex/logIndex when ordering matters.
    */
-  parseSend(tx: NormalizedTx, logs: readonly DecodedLog[]): BridgeSend | null
+  parseSend(tx: NormalizedTx, logs: readonly Log[]): BridgeSend | null
 
   /**
    * Find the destination-chain transaction matching this send.
    * Returns null if not found within reasonable bounds.
+   * Adapters MUST route any direct viem client call through
+   * `ctx.providers.run(chainId, …)` to respect the per-chain semaphore.
    */
   findDestination(send: BridgeSend, ctx: AdapterContext): Promise<NormalizedTx | null>
 }

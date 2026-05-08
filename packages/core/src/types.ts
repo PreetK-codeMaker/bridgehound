@@ -88,8 +88,18 @@ export interface TraceNode {
 export interface TraceStats {
   hops: number
   chainsVisited: ChainId[]
+  /** Branches that ended at the depth cap; user can re-run with --depth N. */
+  hitDepthLimit: number
+  /** Branches that ended without a match (unmatched, error, mixer, …). */
   unresolvedEnds: number
   bridgesUsed: string[]
+}
+
+/** Sentinel returned when a node's token can't yet be derived from the tx. */
+export const UNKNOWN_TOKEN: Omit<TokenInfo, 'chainId'> = {
+  address: null,
+  symbol: '?',
+  decimals: 0,
 }
 
 /** The result of a `trace()` call. */

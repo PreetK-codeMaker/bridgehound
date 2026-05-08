@@ -21,7 +21,7 @@ export class MemoryCache implements CacheAdapter {
   async set<T>(key: string, value: T, ttlSeconds?: number): Promise<void> {
     this.store.set(key, {
       value,
-      expiresAt: ttlSeconds ? Date.now() + ttlSeconds * 1000 : null,
+      expiresAt: ttlSeconds !== undefined ? Date.now() + ttlSeconds * 1000 : null,
     })
   }
 

@@ -1,6 +1,5 @@
-import type { Log } from 'viem'
 import { defaultBridges } from './bridges/registry.js'
-import type { AdapterContext, BridgeAdapter, DecodedLog } from './bridges/types.js'
+import type { AdapterContext, BridgeAdapter } from './bridges/types.js'
 import type { CacheAdapter } from './cache/types.js'
 import { MemoryCache } from './cache/memory.js'
 import { fetchLogs, fetchTx } from './chains/fetchTx.js'
@@ -13,6 +12,7 @@ import type {
   TraceResult,
   TraceStats,
 } from './types.js'
+import { UNKNOWN_TOKEN } from './types.js'
 import { InvalidInputError } from './utils/errors.js'
 
 export interface TraceConfig {
@@ -64,8 +64,7 @@ async function traceFrom(
     from: tx.from,
     to: tx.to,
     amount: tx.value,
-    // Placeholder. Adapters that decode logs should overwrite via the BridgeSend.
-    token: { address: null, symbol: 'ETH', decimals: 18, chainId: tx.chainId },
+    token: { ...UNKNOWN_TOKEN, chainId: tx.chainId },
     timestamp: tx.timestamp,
     children: [],
   }
@@ -83,8 +82,7 @@ async function traceFrom(
     return { ...baseNode, terminationReason: 'no_bridge' }
   }
 
-  const rawLogs = await fetchLogs(ctx.providers, ctx.cache, tx.chainId, tx.hash)
-  const logs = rawLogs.map(toDecodedLog)
+  const logs = await fetchLogs(ctx.providers, ctx.cache, tx.chainId, tx.hash)
 
   const send = adapter.parseSend(tx, logs)
   if (!send) {
@@ -107,14 +105,6 @@ async function traceFrom(
   return { ...node, children: [child] }
 }
 
-function toDecodedLog(log: Log): DecodedLog {
-  return {
-    address: log.address,
-    topics: log.topics,
-    data: log.data,
-  }
-}
-
 function validateInput(input: TraceInput): void {
   if (!input.txHash && !input.address) {
     throw new InvalidInputError('Must provide either txHash or address')
@@ -131,6 +121,7 @@ function computeStats(root: TraceNode): TraceStats {
   const chainsVisited = new Set<ChainId>()
   const bridgesUsed = new Set<string>()
   let hops = 0
+  let hitDepthLimit = 0
   let unresolvedEnds = 0
 
   const walk = (node: TraceNode): void => {
@@ -139,7 +130,9 @@ function computeStats(root: TraceNode): TraceStats {
       bridgesUsed.add(node.bridge.name)
       hops++
     }
-    if (
+    if (node.terminationReason === 'max_depth') {
+      hitDepthLimit++
+    } else if (
       node.terminationReason &&
       node.terminationReason !== 'no_bridge' &&
       node.terminationReason !== 'refund'
@@ -153,6 +146,7 @@ function computeStats(root: TraceNode): TraceStats {
   return {
     hops,
     chainsVisited: [...chainsVisited],
+    hitDepthLimit,
     unresolvedEnds,
     bridgesUsed: [...bridgesUsed],
   }

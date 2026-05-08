@@ -17,15 +17,28 @@ cli
       txHash: string,
       options: { chain: string; depth: string; output: string },
     ) => {
+      const chain = parsePositiveInt(options.chain, '--chain')
+      const depth = parsePositiveInt(options.depth, '--depth')
+      if (!/^0x[a-fA-F0-9]{64}$/.test(txHash)) {
+        console.error(kleur.red(`Invalid tx hash: ${txHash}`))
+        process.exitCode = 1
+        return
+      }
+
       const spinner = ora('Tracing...').start()
       try {
         const result = await trace(
           {
             txHash: txHash as `0x${string}`,
-            startChain: Number(options.chain),
-            maxDepth: Number(options.depth),
+            startChain: chain,
+            maxDepth: depth,
           },
-          { providers: getProvidersFromEnv() },
+          {
+            providers: getProviders('alchemy'),
+            ...(process.env.QUICKNODE_API_KEY
+              ? { fallbackProviders: getProviders('quicknode') }
+              : {}),
+          },
         )
         spinner.succeed('Trace complete')
 
@@ -47,18 +60,38 @@ cli.help()
 cli.version('0.0.1')
 cli.parse()
 
-function getProvidersFromEnv(): Record<number, string> {
-  const key = process.env.ALCHEMY_API_KEY
-  if (!key) {
-    throw new Error('ALCHEMY_API_KEY environment variable is required')
+function parsePositiveInt(raw: string, flag: string): number {
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n <= 0) {
+    console.error(kleur.red(`${flag} must be a positive integer (got "${raw}")`))
+    process.exit(1)
   }
-  return {
-    1: `https://eth-mainnet.g.alchemy.com/v2/${key}`,
-    10: `https://opt-mainnet.g.alchemy.com/v2/${key}`,
-    137: `https://polygon-mainnet.g.alchemy.com/v2/${key}`,
-    8453: `https://base-mainnet.g.alchemy.com/v2/${key}`,
-    42161: `https://arb-mainnet.g.alchemy.com/v2/${key}`,
+  return n
+}
+
+function getProviders(source: 'alchemy' | 'quicknode'): Record<number, string> {
+  if (source === 'alchemy') {
+    const key = process.env.ALCHEMY_API_KEY
+    if (!key) {
+      throw new Error('ALCHEMY_API_KEY environment variable is required')
+    }
+    return {
+      1: `https://eth-mainnet.g.alchemy.com/v2/${key}`,
+      10: `https://opt-mainnet.g.alchemy.com/v2/${key}`,
+      137: `https://polygon-mainnet.g.alchemy.com/v2/${key}`,
+      8453: `https://base-mainnet.g.alchemy.com/v2/${key}`,
+      42161: `https://arb-mainnet.g.alchemy.com/v2/${key}`,
+    }
   }
+  const key = process.env.QUICKNODE_API_KEY!
+  // QuickNode endpoints are per-chain subdomains the user provisions; we
+  // accept a comma-separated CHAIN_ID=URL list via QUICKNODE_API_KEY for now.
+  const map: Record<number, string> = {}
+  for (const pair of key.split(',')) {
+    const [id, url] = pair.split('=')
+    if (id && url) map[Number(id)] = url
+  }
+  return map
 }
 
 function bigintReplacer(_key: string, value: unknown): unknown {
@@ -72,4 +105,13 @@ function printStats(stats: TraceStats): void {
   console.log(`  chains: ${stats.chainsVisited.join(', ')}`)
   console.log(`  bridges: ${stats.bridgesUsed.join(', ') || '(none)'}`)
   console.log(`  unresolved: ${stats.unresolvedEnds}`)
+  if (stats.hitDepthLimit > 0) {
+    console.log(
+      kleur.yellow(
+        `  hit depth limit: ${stats.hitDepthLimit} (re-run with --depth ${
+          (Number.isFinite(stats.hops) ? stats.hops : 0) + 5
+        } to extend)`,
+      ),
+    )
+  }
 }

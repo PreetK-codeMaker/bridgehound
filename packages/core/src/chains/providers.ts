@@ -27,20 +27,25 @@ export class ProviderRegistry {
       throw new RPCError(`No RPC configured for chain ${chainId}`)
     }
 
-    const client = createPublicClient({
+    const client: PublicClient = createPublicClient({
       chain: getChain(chainId),
       transport: http(url, {
         retryCount: 2,
         retryDelay: 250,
         timeout: 15_000,
       }),
-    }) as PublicClient
+    })
 
     this.clients.set(chainId, client)
     return client
   }
 
-  async withConcurrency<T>(chainId: ChainId, fn: () => Promise<T>): Promise<T> {
+  /**
+   * Route an RPC operation through the per-chain semaphore.
+   * Adapters should wrap any direct viem client call (`getLogs`, `getBlock`, …)
+   * in this so a single chain's rate limit doesn't bring down the rest.
+   */
+  async run<T>(chainId: ChainId, fn: () => Promise<T>): Promise<T> {
     let sem = this.semaphores.get(chainId)
     if (!sem) {
       sem = new Semaphore(this.config.concurrency ?? 5)

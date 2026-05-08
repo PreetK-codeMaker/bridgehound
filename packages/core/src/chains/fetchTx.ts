@@ -1,4 +1,5 @@
 import type { Hash, Log } from 'viem'
+import { deserializeBigInts, serializeBigInts } from '../cache/serialize.js'
 import type { CacheAdapter } from '../cache/types.js'
 import type { ChainId, NormalizedTx } from '../types.js'
 import { RPCError } from '../utils/errors.js'
@@ -21,10 +22,10 @@ export async function fetchTx(
   chainId: ChainId,
   hash: Hash,
 ): Promise<NormalizedTx> {
-  const cached = await cache.get<NormalizedTx>(txKey(chainId, hash))
-  if (cached) return cached
+  const cached = await cache.get<unknown>(txKey(chainId, hash))
+  if (cached) return deserializeBigInts(cached) as NormalizedTx
 
-  return providers.withConcurrency(chainId, async () => {
+  return providers.run(chainId, async () => {
     const client = providers.client(chainId)
     try {
       const tx = await client.getTransaction({ hash })
@@ -41,7 +42,7 @@ export async function fetchTx(
         input: tx.input,
       }
 
-      await cache.set(txKey(chainId, hash), normalized, TX_TTL_SECONDS)
+      await cache.set(txKey(chainId, hash), serializeBigInts(normalized), TX_TTL_SECONDS)
       return normalized
     } catch (err) {
       if (err instanceof RPCError) throw err
@@ -56,18 +57,18 @@ export async function fetchLogs(
   chainId: ChainId,
   hash: Hash,
 ): Promise<readonly Log[]> {
-  const cached = await cache.get<readonly Log[]>(logsKey(chainId, hash))
-  if (cached) return cached
+  const cached = await cache.get<unknown>(logsKey(chainId, hash))
+  if (cached) return deserializeBigInts(cached) as readonly Log[]
 
-  return providers.withConcurrency(chainId, async () => {
+  return providers.run(chainId, async () => {
     const client = providers.client(chainId)
     try {
       const receipt = await client.getTransactionReceipt({ hash })
-      if (receipt.transactionHash.toLowerCase() !== hash.toLowerCase()) {
-        throw new RPCError(`Receipt hash mismatch for ${hash}`)
+      if (receipt.status !== 'success') {
+        throw new RPCError(`tx ${hash} on chain ${chainId} did not succeed`)
       }
       const logs = receipt.logs
-      await cache.set(logsKey(chainId, hash), logs, LOGS_TTL_SECONDS)
+      await cache.set(logsKey(chainId, hash), serializeBigInts(logs), LOGS_TTL_SECONDS)
       return logs
     } catch (err) {
       if (err instanceof RPCError) throw err
