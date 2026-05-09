@@ -30,4 +30,12 @@ export interface BridgeAdapter {
    * `ctx.providers.run(chainId, …)` to respect the per-chain semaphore.
    */
   findDestination(send: BridgeSend, ctx: AdapterContext): Promise<NormalizedTx | null>
+
+  /**
+   * Chains this adapter has at least one contract configured for. Used by
+   * tooling (e.g. `bridgehound bridges`) to show which adapters are live
+   * vs. wired-but-inactive. Empty array → adapter exists in the registry
+   * but has no addresses populated yet.
+   */
+  supportedChains(): readonly ChainId[]
 }

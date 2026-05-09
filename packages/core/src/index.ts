@@ -2,6 +2,7 @@ export const VERSION = '0.0.1'
 
 export { trace, type TraceConfig } from './trace.js'
 export { defaultBridges } from './bridges/registry.js'
+export { SUPPORTED_CHAINS, getChain } from './chains/index.js'
 export { MemoryCache } from './cache/memory.js'
 export type {
   BridgeSend,

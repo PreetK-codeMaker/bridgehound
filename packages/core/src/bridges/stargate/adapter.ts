@@ -19,6 +19,12 @@ class StargateAdapter implements BridgeAdapter {
     return isStargateContract(chainId, contract)
   }
 
+  supportedChains(): readonly ChainId[] {
+    return Object.keys(STARGATE_OFTS)
+      .map(Number)
+      .filter((id) => STARGATE_OFTS[id]!.length > 0)
+  }
+
   parseSend(tx: NormalizedTx, logs: readonly Log[]): BridgeSend | null {
     if (!tx.to) return null
     if (!isStargateContract(tx.chainId, tx.to)) return null

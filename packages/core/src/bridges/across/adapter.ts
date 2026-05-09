@@ -25,6 +25,10 @@ class AcrossAdapter implements BridgeAdapter {
     return contract.toLowerCase() === expected.toLowerCase()
   }
 
+  supportedChains(): readonly ChainId[] {
+    return Object.keys(SPOKE_POOL).map(Number)
+  }
+
   parseSend(tx: NormalizedTx, logs: readonly Log[]): BridgeSend | null {
     const spoke = SPOKE_POOL[tx.chainId]
     if (!spoke) return null

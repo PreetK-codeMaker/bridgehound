@@ -22,6 +22,12 @@ class HopAdapter implements BridgeAdapter {
     return isHopContract(chainId, contract)
   }
 
+  supportedChains(): readonly ChainId[] {
+    return Object.keys(HOP_CONTRACTS)
+      .map(Number)
+      .filter((id) => HOP_CONTRACTS[id]!.length > 0)
+  }
+
   parseSend(tx: NormalizedTx, logs: readonly Log[]): BridgeSend | null {
     if (!tx.to) return null
     if (!isHopContract(tx.chainId, tx.to)) return null
