@@ -16,3 +16,11 @@ export type {
 } from './types.js'
 export type { BridgeAdapter } from './bridges/types.js'
 export type { CacheAdapter } from './cache/types.js'
+export {
+  BridgehoundError,
+  BridgeDecodeError,
+  InvalidInputError,
+  RevertedTxError,
+  RPCError,
+  UnknownChainError,
+} from './utils/errors.js'
