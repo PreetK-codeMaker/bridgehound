@@ -1,3 +1,5 @@
+import type { Log } from 'viem'
+import { isHex } from 'viem'
 import { defaultBridges } from './bridges/registry.js'
 import type { AdapterContext, BridgeAdapter } from './bridges/types.js'
 import type { CacheAdapter } from './cache/types.js'
@@ -13,11 +15,10 @@ import type {
   TraceStats,
 } from './types.js'
 import { UNKNOWN_TOKEN } from './types.js'
-import { InvalidInputError } from './utils/errors.js'
+import { InvalidInputError, RevertedTxError } from './utils/errors.js'
 
 export interface TraceConfig {
-  providers: Record<ChainId, string>
-  fallbackProviders?: Record<ChainId, string>
+  providers: Partial<Record<ChainId, string>>
   bridges?: readonly BridgeAdapter[]
   cache?: CacheAdapter
   concurrency?: number
@@ -28,9 +29,10 @@ export async function trace(input: TraceInput, config: TraceConfig): Promise<Tra
 
   const providers = new ProviderRegistry({
     primary: config.providers,
-    ...(config.fallbackProviders ? { fallback: config.fallbackProviders } : {}),
     ...(config.concurrency !== undefined ? { concurrency: config.concurrency } : {}),
   })
+  // Each trace() call gets a fresh MemoryCache by default; pass `cache` in
+  // config to share a cache across calls in the same process.
   const cache = config.cache ?? new MemoryCache()
   const bridges = config.bridges ?? defaultBridges
   const ctx: AdapterContext = { providers, cache }
@@ -43,7 +45,7 @@ export async function trace(input: TraceInput, config: TraceConfig): Promise<Tra
     root = await traceFrom(tx, 0, maxDepth, bridges, ctx)
   } else if (input.address) {
     // Address-as-input is deferred — see open questions in ARCHITECTURE.md.
-    throw new Error('address-as-input is not yet implemented')
+    throw new InvalidInputError('address-as-input is not yet implemented')
   } else {
     throw new InvalidInputError('Must provide either txHash or address')
   }
@@ -82,7 +84,15 @@ async function traceFrom(
     return { ...baseNode, terminationReason: 'no_bridge' }
   }
 
-  const logs = await fetchLogs(ctx.providers, ctx.cache, tx.chainId, tx.hash)
+  let logs: readonly Log[]
+  try {
+    logs = await fetchLogs(ctx.providers, ctx.cache, tx.chainId, tx.hash)
+  } catch (err) {
+    if (err instanceof RevertedTxError) {
+      return { ...baseNode, terminationReason: 'error' }
+    }
+    throw err
+  }
 
   const send = adapter.parseSend(tx, logs)
   if (!send) {
@@ -115,6 +125,9 @@ function validateInput(input: TraceInput): void {
   }
   if (input.txHash && input.address) {
     throw new InvalidInputError('Provide either txHash or address, not both')
+  }
+  if (input.txHash && (!isHex(input.txHash, { strict: true }) || input.txHash.length !== 66)) {
+    throw new InvalidInputError(`Invalid txHash: ${input.txHash}`)
   }
   if (typeof input.startChain !== 'number') {
     throw new InvalidInputError('startChain is required')

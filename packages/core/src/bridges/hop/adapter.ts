@@ -1,12 +1,17 @@
-import type { Address, Hash, Log } from 'viem'
+import type { Address, DecodeEventLogReturnType, Log } from 'viem'
 import { decodeEventLog, encodeEventTopics, isHex } from 'viem'
 import { fetchTx } from '../../chains/fetchTx.js'
 import type { BridgeSend, ChainId, NormalizedTx, TokenInfo } from '../../types.js'
 import { BridgeDecodeError } from '../../utils/errors.js'
-import { DESTINATION_LOOKBACK_BLOCKS } from '../lookback.js'
+import { BLOCKS_PER_SECOND, DESTINATION_LOOKBACK_BLOCKS, LOG_SCAN_CHUNK } from '../lookback.js'
 import type { AdapterContext, BridgeAdapter } from '../types.js'
 import { TRANSFER_SENT_EVENT, WITHDRAWAL_BONDED_EVENT } from './abi.js'
 import { HOP_CONTRACTS, isHopContract } from './addresses.js'
+
+type TransferSentDecoded = DecodeEventLogReturnType<
+  [typeof TRANSFER_SENT_EVENT],
+  'TransferSent'
+>
 
 const BRIDGE_NAME = 'hop'
 
@@ -36,10 +41,11 @@ class HopAdapter implements BridgeAdapter {
     )
     if (!candidate) return null
 
-    let decoded: ReturnType<typeof decodeEventLog>
+    let decoded: TransferSentDecoded
     try {
       decoded = decodeEventLog({
         abi: [TRANSFER_SENT_EVENT],
+        eventName: 'TransferSent',
         data: candidate.data,
         topics: candidate.topics,
       })
@@ -47,15 +53,14 @@ class HopAdapter implements BridgeAdapter {
       throw new BridgeDecodeError(`Failed to decode Hop TransferSent log on ${tx.hash}`, err)
     }
 
-    if (decoded.eventName !== 'TransferSent') return null
-    const args = decoded.args as Record<string, unknown>
+    const args = decoded.args
 
-    const rawDstChain = args['chainId'] as bigint
+    const rawDstChain = args.chainId
     if (rawDstChain > BigInt(Number.MAX_SAFE_INTEGER)) return null
     const dstChain = Number(rawDstChain)
-    const recipient = args['recipient'] as Address
-    const amount = args['amount'] as bigint
-    const transferId = args['transferId'] as `0x${string}`
+    const recipient = args.recipient
+    const amount = args.amount
+    const transferId = args.transferId
 
     // The Hop bridge contract is per-token, but its address is the bridge
     // contract — not the underlying ERC-20. Resolving the real token requires
@@ -65,8 +70,6 @@ class HopAdapter implements BridgeAdapter {
     // `sourceContract` instead.
     const token: TokenInfo = {
       address: null,
-      symbol: '?',
-      decimals: 0,
       chainId: tx.chainId,
     }
 
@@ -105,23 +108,36 @@ class HopAdapter implements BridgeAdapter {
       const client = ctx.providers.client(send.dstChain)
       const head = await client.getBlockNumber()
       const lookback = DESTINATION_LOOKBACK_BLOCKS[send.dstChain] ?? 50_000n
-      const fromBlock = head > lookback ? head - lookback : 0n
+      const rawEarliest = head > lookback ? head - lookback : 0n
+      const blocksPerSecond = BLOCKS_PER_SECOND[send.dstChain] ?? 1
+      const elapsedSeconds = Math.max(0, Math.floor(Date.now() / 1000) - send.timestamp)
+      const elapsedBlocks = BigInt(Math.ceil(elapsedSeconds * blocksPerSecond))
+      const timestampBound = head > elapsedBlocks ? head - elapsedBlocks : 0n
+      const earliest = timestampBound > rawEarliest ? timestampBound : rawEarliest
 
-      const logs = await client.getLogs({
-        address: [...dstContracts],
-        event: WITHDRAWAL_BONDED_EVENT,
-        args: { transferId },
-        fromBlock,
-        toBlock: head,
-      })
-      return logs[0] ?? null
+      let toBlock = head
+      while (toBlock >= earliest) {
+        const fromBlock =
+          toBlock > earliest + LOG_SCAN_CHUNK - 1n ? toBlock - LOG_SCAN_CHUNK + 1n : earliest
+        const logs = await client.getLogs({
+          address: [...dstContracts],
+          event: WITHDRAWAL_BONDED_EVENT,
+          args: { transferId },
+          fromBlock,
+          toBlock,
+        })
+        if (logs.length > 0) return logs[0] ?? null
+        if (fromBlock === earliest) break
+        toBlock = fromBlock - 1n
+      }
+      return null
     })
 
     if (!matchingLog) return null
     const fillTxHash = matchingLog.transactionHash
     if (!fillTxHash) return null
 
-    return fetchTx(ctx.providers, ctx.cache, send.dstChain, fillTxHash as Hash)
+    return fetchTx(ctx.providers, ctx.cache, send.dstChain, fillTxHash)
   }
 }
 

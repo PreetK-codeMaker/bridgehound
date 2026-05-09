@@ -1,13 +1,18 @@
-import type { Address, Hash, Log } from 'viem'
+import type { Address, DecodeEventLogReturnType, Log } from 'viem'
 import { decodeEventLog, encodeEventTopics } from 'viem'
 import { fetchTx } from '../../chains/fetchTx.js'
 import type { BridgeSend, ChainId, NormalizedTx, TokenInfo } from '../../types.js'
 import { BridgeDecodeError } from '../../utils/errors.js'
-import { DESTINATION_LOOKBACK_BLOCKS } from '../lookback.js'
+import { BLOCKS_PER_SECOND, DESTINATION_LOOKBACK_BLOCKS, LOG_SCAN_CHUNK } from '../lookback.js'
 import type { AdapterContext, BridgeAdapter } from '../types.js'
 import { FILLED_RELAY_EVENT, FUNDS_DEPOSITED_EVENT } from './abi.js'
 import { SPOKE_POOL } from './addresses.js'
-import { bytes32ToAddress } from './codec.js'
+import { bytes32ToAddressOrNull } from './codec.js'
+
+type FundsDepositedDecoded = DecodeEventLogReturnType<
+  [typeof FUNDS_DEPOSITED_EVENT],
+  'FundsDeposited'
+>
 
 const BRIDGE_NAME = 'across'
 
@@ -36,10 +41,11 @@ class AcrossAdapter implements BridgeAdapter {
     )
     if (!candidate) return null
 
-    let decoded: ReturnType<typeof decodeEventLog>
+    let decoded: FundsDepositedDecoded
     try {
       decoded = decodeEventLog({
         abi: [FUNDS_DEPOSITED_EVENT],
+        eventName: 'FundsDeposited',
         data: candidate.data,
         topics: candidate.topics,
       })
@@ -47,34 +53,31 @@ class AcrossAdapter implements BridgeAdapter {
       throw new BridgeDecodeError(`Failed to decode Across FundsDeposited log on ${tx.hash}`, err)
     }
 
-    if (decoded.eventName !== 'FundsDeposited') return null
-    const args = decoded.args as Record<string, unknown>
+    const args = decoded.args
 
-    const rawDstChain = args['destinationChainId'] as bigint
+    const rawDstChain = args.destinationChainId
     if (rawDstChain > BigInt(Number.MAX_SAFE_INTEGER)) return null
     const dstChain = Number(rawDstChain)
-    const inputAmount = args['inputAmount'] as bigint
-    const depositId = args['depositId'] as bigint
+    const inputAmount = args.inputAmount
+    const depositId = args.depositId
+    const fillDeadline = args.fillDeadline
 
-    let recipient: Address
-    let inputToken: Address
-    try {
-      recipient = bytes32ToAddress(args['recipient'] as `0x${string}`)
-      inputToken = bytes32ToAddress(args['inputToken'] as `0x${string}`)
-    } catch {
-      // Non-EVM destination (e.g. Solana). We don't trace those yet — let the
-      // caller treat this as "not a bridge send we can follow."
+    const recipient = bytes32ToAddressOrNull(args.recipient)
+    const inputToken = bytes32ToAddressOrNull(args.inputToken)
+    if (recipient === null || inputToken === null) {
+      // Non-EVM destination (e.g. Solana). We don't trace those yet.
       return null
     }
 
     const token: TokenInfo = {
       address: inputToken,
-      // Symbol/decimals enrichment is a follow-up; address is the load-bearing
-      // identifier for now.
-      symbol: '?',
-      decimals: 0,
       chainId: tx.chainId,
     }
+
+    const minDelay = 60
+    const derived = Number(fillDeadline) - tx.timestamp
+    const cap = 6 * 60 * 60
+    const maxDelay = derived > minDelay ? Math.min(derived, cap) : cap
 
     return {
       bridge: BRIDGE_NAME,
@@ -85,9 +88,7 @@ class AcrossAdapter implements BridgeAdapter {
       amount: inputAmount,
       messageId: depositId.toString(),
       timestamp: tx.timestamp,
-      // Across typically fills within minutes; allow up to fillDeadline
-      // (default ~6h) as the upper bound for fuzzy matchers downstream.
-      expectedDelaySeconds: [60, 6 * 60 * 60],
+      expectedDelaySeconds: [minDelay, maxDelay],
     }
   }
 
@@ -96,6 +97,7 @@ class AcrossAdapter implements BridgeAdapter {
     ctx: AdapterContext,
   ): Promise<NormalizedTx | null> {
     if (!send.messageId) return null
+    const messageId = send.messageId
     const dstSpoke = SPOKE_POOL[send.dstChain]
     if (!dstSpoke) return null
 
@@ -103,26 +105,39 @@ class AcrossAdapter implements BridgeAdapter {
       const client = ctx.providers.client(send.dstChain)
       const head = await client.getBlockNumber()
       const lookback = DESTINATION_LOOKBACK_BLOCKS[send.dstChain] ?? 50_000n
-      const fromBlock = head > lookback ? head - lookback : 0n
+      const rawEarliest = head > lookback ? head - lookback : 0n
+      const blocksPerSecond = BLOCKS_PER_SECOND[send.dstChain] ?? 1
+      const elapsedSeconds = Math.max(0, Math.floor(Date.now() / 1000) - send.timestamp)
+      const elapsedBlocks = BigInt(Math.ceil(elapsedSeconds * blocksPerSecond))
+      const timestampBound = head > elapsedBlocks ? head - elapsedBlocks : 0n
+      const earliest = timestampBound > rawEarliest ? timestampBound : rawEarliest
 
-      const logs = await client.getLogs({
-        address: dstSpoke,
-        event: FILLED_RELAY_EVENT,
-        args: {
-          originChainId: BigInt(send.srcChain),
-          depositId: BigInt(send.messageId!),
-        },
-        fromBlock,
-        toBlock: head,
-      })
-      return logs[0] ?? null
+      let toBlock = head
+      while (toBlock >= earliest) {
+        const fromBlock =
+          toBlock > earliest + LOG_SCAN_CHUNK - 1n ? toBlock - LOG_SCAN_CHUNK + 1n : earliest
+        const logs = await client.getLogs({
+          address: dstSpoke,
+          event: FILLED_RELAY_EVENT,
+          args: {
+            originChainId: BigInt(send.srcChain),
+            depositId: BigInt(messageId),
+          },
+          fromBlock,
+          toBlock,
+        })
+        if (logs.length > 0) return logs[0] ?? null
+        if (fromBlock === earliest) break
+        toBlock = fromBlock - 1n
+      }
+      return null
     })
 
     if (!matchingLog) return null
     const fillTxHash = matchingLog.transactionHash
     if (!fillTxHash) return null
 
-    return fetchTx(ctx.providers, ctx.cache, send.dstChain, fillTxHash as Hash)
+    return fetchTx(ctx.providers, ctx.cache, send.dstChain, fillTxHash)
   }
 }
 

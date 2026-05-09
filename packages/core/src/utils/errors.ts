@@ -6,8 +6,7 @@ export class BridgehoundError extends Error {
 }
 
 export class RPCError extends BridgehoundError {}
-export class RateLimitError extends RPCError {}
 export class UnknownChainError extends BridgehoundError {}
 export class BridgeDecodeError extends BridgehoundError {}
-export class MatchingError extends BridgehoundError {}
 export class InvalidInputError extends BridgehoundError {}
+export class RevertedTxError extends BridgehoundError {}

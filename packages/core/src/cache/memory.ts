@@ -8,6 +8,13 @@ interface Entry {
 export class MemoryCache implements CacheAdapter {
   private store = new Map<string, Entry>()
 
+  /**
+   * Returns the cached value, or `null` if absent or expired.
+   *
+   * Note: this signature does *not* distinguish "key not present" from "key
+   * cached with the value `null`". Callers that need to cache nullable values
+   * should wrap them in a sentinel before storing.
+   */
   async get<T>(key: string): Promise<T | null> {
     const entry = this.store.get(key)
     if (!entry) return null

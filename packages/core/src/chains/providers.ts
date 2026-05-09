@@ -5,9 +5,7 @@ import { getChain } from './index.js'
 
 export interface ProviderConfig {
   /** Map of chainId → primary RPC URL. */
-  primary: Record<ChainId, string>
-  /** Optional fallback URLs, used on rate limit or 5xx. */
-  fallback?: Record<ChainId, string>
+  primary: Partial<Record<ChainId, string>>
   /** Max in-flight requests per chain. Defaults to 5. */
   concurrency?: number
 }
@@ -56,22 +54,28 @@ export class ProviderRegistry {
 }
 
 class Semaphore {
-  private active = 0
+  private slots: number
   private queue: Array<() => void> = []
 
-  constructor(private readonly limit: number) {}
+  constructor(limit: number) {
+    this.slots = limit
+  }
 
   async run<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.active >= this.limit) {
+    if (this.slots > 0) {
+      this.slots--
+    } else {
       await new Promise<void>((resolve) => this.queue.push(resolve))
     }
-    this.active++
     try {
       return await fn()
     } finally {
-      this.active--
       const next = this.queue.shift()
-      if (next) next()
+      if (next) {
+        next()
+      } else {
+        this.slots++
+      }
     }
   }
 }

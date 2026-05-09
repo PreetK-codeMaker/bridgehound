@@ -13,7 +13,7 @@ import type { ChainId } from '../../types.js'
  *
  * Empty-by-default — adapter is wired but inactive until populated.
  */
-export const HOP_CONTRACTS: Record<ChainId, readonly Address[]> = {
+export const HOP_CONTRACTS: Partial<Record<ChainId, readonly Address[]>> = {
   // 1: ['0x...', '0x...'],     // Ethereum: L1Bridge per token (USDC, USDT, ETH, …)
   // 10: ['0x...', '0x...'],    // Optimism: L2_AmmWrapper / L2Bridge per token
   // 137: ['0x...', '0x...'],   // Polygon

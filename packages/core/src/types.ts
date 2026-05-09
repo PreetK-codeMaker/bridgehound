@@ -8,9 +8,9 @@ export interface TokenInfo {
   /** ERC-20 contract address, or null for the chain's native token. */
   address: Address | null
   /** Symbol for display, e.g. "USDC". */
-  symbol: string
+  symbol?: string
   /** Decimals — 6 for USDC, 18 for ETH/most tokens. */
-  decimals: number
+  decimals?: number
   /** Chain this token is on. */
   chainId: ChainId
 }
@@ -91,7 +91,7 @@ export interface TraceNode {
     sourceContract?: Address
   }
   /** Destination-chain transactions, when this was a bridge send. */
-  children: TraceNode[]
+  children: readonly TraceNode[]
   /** Set on leaf nodes only. */
   terminationReason?: TerminationReason
   /** Free-form details for the UI to surface. */
@@ -112,8 +112,6 @@ export interface TraceStats {
 /** Sentinel returned when a node's token can't yet be derived from the tx. */
 export const UNKNOWN_TOKEN: Omit<TokenInfo, 'chainId'> = {
   address: null,
-  symbol: '?',
-  decimals: 0,
 }
 
 /** The result of a `trace()` call. */
@@ -130,6 +128,4 @@ export interface TraceInput {
   startChain: ChainId
   /** Default 5. */
   maxDepth?: number
-  /** Default 10. Caps fan-out per node. */
-  maxBranches?: number
 }

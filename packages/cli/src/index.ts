@@ -34,10 +34,7 @@ cli
             maxDepth: depth,
           },
           {
-            providers: getProviders('alchemy'),
-            ...(process.env.QUICKNODE_API_KEY
-              ? { fallbackProviders: getProviders('quicknode') }
-              : {}),
+            providers: getAlchemyProviders(),
           },
         )
         spinner.succeed('Trace complete')
@@ -46,7 +43,7 @@ cli
           process.stdout.write(JSON.stringify(result, bigintReplacer, 2) + '\n')
         } else {
           renderTree(result.root)
-          printStats(result.stats)
+          printStats(result.stats, depth)
         }
       } catch (err) {
         spinner.fail('Trace failed')
@@ -69,36 +66,25 @@ function parsePositiveInt(raw: string, flag: string): number {
   return n
 }
 
-function getProviders(source: 'alchemy' | 'quicknode'): Record<number, string> {
-  if (source === 'alchemy') {
-    const key = process.env.ALCHEMY_API_KEY
-    if (!key) {
-      throw new Error('ALCHEMY_API_KEY environment variable is required')
-    }
-    return {
-      1: `https://eth-mainnet.g.alchemy.com/v2/${key}`,
-      10: `https://opt-mainnet.g.alchemy.com/v2/${key}`,
-      137: `https://polygon-mainnet.g.alchemy.com/v2/${key}`,
-      8453: `https://base-mainnet.g.alchemy.com/v2/${key}`,
-      42161: `https://arb-mainnet.g.alchemy.com/v2/${key}`,
-    }
+function getAlchemyProviders(): Record<number, string> {
+  const key = process.env.ALCHEMY_API_KEY
+  if (!key) {
+    throw new Error('ALCHEMY_API_KEY environment variable is required')
   }
-  const key = process.env.QUICKNODE_API_KEY!
-  // QuickNode endpoints are per-chain subdomains the user provisions; we
-  // accept a comma-separated CHAIN_ID=URL list via QUICKNODE_API_KEY for now.
-  const map: Record<number, string> = {}
-  for (const pair of key.split(',')) {
-    const [id, url] = pair.split('=')
-    if (id && url) map[Number(id)] = url
+  return {
+    1: `https://eth-mainnet.g.alchemy.com/v2/${key}`,
+    10: `https://opt-mainnet.g.alchemy.com/v2/${key}`,
+    137: `https://polygon-mainnet.g.alchemy.com/v2/${key}`,
+    8453: `https://base-mainnet.g.alchemy.com/v2/${key}`,
+    42161: `https://arb-mainnet.g.alchemy.com/v2/${key}`,
   }
-  return map
 }
 
 function bigintReplacer(_key: string, value: unknown): unknown {
   return typeof value === 'bigint' ? value.toString() : value
 }
 
-function printStats(stats: TraceStats): void {
+function printStats(stats: TraceStats, maxDepth: number): void {
   console.log()
   console.log(kleur.bold('Summary'))
   console.log(`  hops: ${stats.hops}`)
@@ -108,9 +94,7 @@ function printStats(stats: TraceStats): void {
   if (stats.hitDepthLimit > 0) {
     console.log(
       kleur.yellow(
-        `  hit depth limit: ${stats.hitDepthLimit} (re-run with --depth ${
-          (Number.isFinite(stats.hops) ? stats.hops : 0) + 5
-        } to extend)`,
+        `  hit depth limit: ${stats.hitDepthLimit} (re-run with --depth ${maxDepth + 5} to extend)`,
       ),
     )
   }

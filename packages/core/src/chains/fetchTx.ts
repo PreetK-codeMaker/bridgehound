@@ -2,7 +2,7 @@ import type { Hash, Log } from 'viem'
 import { deserializeBigInts, serializeBigInts } from '../cache/serialize.js'
 import type { CacheAdapter } from '../cache/types.js'
 import type { ChainId, NormalizedTx } from '../types.js'
-import { RPCError } from '../utils/errors.js'
+import { InvalidInputError, RevertedTxError, RPCError } from '../utils/errors.js'
 import type { ProviderRegistry } from './providers.js'
 
 const TX_TTL_SECONDS = 60 * 60 * 24
@@ -29,6 +29,9 @@ export async function fetchTx(
     const client = providers.client(chainId)
     try {
       const tx = await client.getTransaction({ hash })
+      if (tx.blockNumber === null) {
+        throw new InvalidInputError(`Tx ${hash} on chain ${chainId} is pending; cannot trace`)
+      }
       const block = await client.getBlock({ blockNumber: tx.blockNumber })
 
       const normalized: NormalizedTx = {
@@ -46,6 +49,7 @@ export async function fetchTx(
       return normalized
     } catch (err) {
       if (err instanceof RPCError) throw err
+      if (err instanceof InvalidInputError) throw err
       throw new RPCError(`Failed to fetch tx ${hash} on chain ${chainId}`, err)
     }
   })
@@ -64,14 +68,15 @@ export async function fetchLogs(
     const client = providers.client(chainId)
     try {
       const receipt = await client.getTransactionReceipt({ hash })
-      if (receipt.status !== 'success') {
-        throw new RPCError(`tx ${hash} on chain ${chainId} did not succeed`)
+      if (receipt.status === 'reverted') {
+        throw new RevertedTxError(`Tx ${hash} on chain ${chainId} was reverted`)
       }
       const logs = receipt.logs
       await cache.set(logsKey(chainId, hash), serializeBigInts(logs), LOGS_TTL_SECONDS)
       return logs
     } catch (err) {
       if (err instanceof RPCError) throw err
+      if (err instanceof RevertedTxError) throw err
       throw new RPCError(`Failed to fetch logs for ${hash} on chain ${chainId}`, err)
     }
   })

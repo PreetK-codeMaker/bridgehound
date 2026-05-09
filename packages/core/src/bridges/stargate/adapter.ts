@@ -1,12 +1,14 @@
-import type { Address, Hash, Log } from 'viem'
+import type { Address, DecodeEventLogReturnType, Log } from 'viem'
 import { decodeEventLog, encodeEventTopics, isHex } from 'viem'
 import { fetchTx } from '../../chains/fetchTx.js'
 import type { BridgeSend, ChainId, NormalizedTx, TokenInfo } from '../../types.js'
 import { BridgeDecodeError } from '../../utils/errors.js'
-import { DESTINATION_LOOKBACK_BLOCKS } from '../lookback.js'
+import { BLOCKS_PER_SECOND, DESTINATION_LOOKBACK_BLOCKS, LOG_SCAN_CHUNK } from '../lookback.js'
 import type { AdapterContext, BridgeAdapter } from '../types.js'
 import { OFT_RECEIVED_EVENT, OFT_SENT_EVENT } from './abi.js'
 import { EID_TO_CHAIN_ID, STARGATE_OFTS, isStargateContract } from './addresses.js'
+
+type OFTSentDecoded = DecodeEventLogReturnType<[typeof OFT_SENT_EVENT], 'OFTSent'>
 
 const BRIDGE_NAME = 'stargate'
 
@@ -29,10 +31,11 @@ class StargateAdapter implements BridgeAdapter {
     )
     if (!candidate) return null
 
-    let decoded: ReturnType<typeof decodeEventLog>
+    let decoded: OFTSentDecoded
     try {
       decoded = decodeEventLog({
         abi: [OFT_SENT_EVENT],
+        eventName: 'OFTSent',
         data: candidate.data,
         topics: candidate.topics,
       })
@@ -40,18 +43,17 @@ class StargateAdapter implements BridgeAdapter {
       throw new BridgeDecodeError(`Failed to decode Stargate OFTSent log on ${tx.hash}`, err)
     }
 
-    if (decoded.eventName !== 'OFTSent') return null
-    const args = decoded.args as Record<string, unknown>
+    const args = decoded.args
 
-    const dstEid = args['dstEid'] as number
+    const dstEid = args.dstEid
     const dstChain = EID_TO_CHAIN_ID[dstEid]
     if (!dstChain) {
       // Destination chain isn't one we trace (might be Solana, Aptos, …).
       return null
     }
 
-    const guid = args['guid'] as `0x${string}`
-    const amount = args['amountSentLD'] as bigint
+    const guid = args.guid
+    const amount = args.amountSentLD
 
     // The OFT contract emitted the event, but for pool-based OFTs (USDC, USDT)
     // the OFT address is *not* the underlying ERC-20 — it's the bridge wrapper.
@@ -61,8 +63,6 @@ class StargateAdapter implements BridgeAdapter {
     // on `sourceContract` instead. (Same pattern as Hop.)
     const token: TokenInfo = {
       address: null,
-      symbol: '?',
-      decimals: 0,
       chainId: tx.chainId,
     }
 
@@ -95,25 +95,36 @@ class StargateAdapter implements BridgeAdapter {
       const client = ctx.providers.client(send.dstChain)
       const head = await client.getBlockNumber()
       const lookback = DESTINATION_LOOKBACK_BLOCKS[send.dstChain] ?? 50_000n
-      const fromBlock = head > lookback ? head - lookback : 0n
+      const rawEarliest = head > lookback ? head - lookback : 0n
+      const blocksPerSecond = BLOCKS_PER_SECOND[send.dstChain] ?? 1
+      const elapsedSeconds = Math.max(0, Math.floor(Date.now() / 1000) - send.timestamp)
+      const elapsedBlocks = BigInt(Math.ceil(elapsedSeconds * blocksPerSecond))
+      const timestampBound = head > elapsedBlocks ? head - elapsedBlocks : 0n
+      const earliest = timestampBound > rawEarliest ? timestampBound : rawEarliest
 
-      // viem's getLogs takes a single address or a mutable array; OFTs
-      // differ per token, so we pass the array and filter by guid.
-      const logs = await client.getLogs({
-        address: [...dstOFTs],
-        event: OFT_RECEIVED_EVENT,
-        args: { guid },
-        fromBlock,
-        toBlock: head,
-      })
-      return logs[0] ?? null
+      let toBlock = head
+      while (toBlock >= earliest) {
+        const fromBlock =
+          toBlock > earliest + LOG_SCAN_CHUNK - 1n ? toBlock - LOG_SCAN_CHUNK + 1n : earliest
+        const logs = await client.getLogs({
+          address: [...dstOFTs],
+          event: OFT_RECEIVED_EVENT,
+          args: { guid },
+          fromBlock,
+          toBlock,
+        })
+        if (logs.length > 0) return logs[0] ?? null
+        if (fromBlock === earliest) break
+        toBlock = fromBlock - 1n
+      }
+      return null
     })
 
     if (!matchingLog) return null
     const fillTxHash = matchingLog.transactionHash
     if (!fillTxHash) return null
 
-    return fetchTx(ctx.providers, ctx.cache, send.dstChain, fillTxHash as Hash)
+    return fetchTx(ctx.providers, ctx.cache, send.dstChain, fillTxHash)
   }
 }
 

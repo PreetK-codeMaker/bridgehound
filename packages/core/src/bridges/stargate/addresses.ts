@@ -15,7 +15,7 @@ import type { ChainId } from '../../types.js'
  * Filling this in is a separate task — the adapter is wired but inactive
  * until at least one chain has entries.
  */
-export const STARGATE_OFTS: Record<ChainId, readonly Address[]> = {
+export const STARGATE_OFTS: Partial<Record<ChainId, readonly Address[]>> = {
   // 1: ['0x...', '0x...'],     // Ethereum: USDC OFT, USDT OFT, ETH OFT, …
   // 10: ['0x...', '0x...'],    // Optimism
   // 137: ['0x...', '0x...'],   // Polygon
@@ -31,7 +31,7 @@ export const STARGATE_OFTS: Record<ChainId, readonly Address[]> = {
  * Source: docs.layerzero.network/v2/deployments/deployed-contracts
  * Verify before relying on these.
  */
-export const EID_TO_CHAIN_ID: Record<number, ChainId> = {
+export const EID_TO_CHAIN_ID: Partial<Record<number, ChainId>> = {
   // 30101: 1,      // Ethereum
   // 30110: 42161,  // Arbitrum
   // 30111: 10,     // Optimism
