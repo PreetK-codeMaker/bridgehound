@@ -1,5 +1,9 @@
 import tseslint from '@typescript-eslint/eslint-plugin'
 import tsparser from '@typescript-eslint/parser'
+import { fileURLToPath } from 'node:url'
+import { dirname } from 'node:path'
+
+const tsconfigRootDir = dirname(fileURLToPath(import.meta.url))
 
 export default [
   {
@@ -7,7 +11,11 @@ export default [
     languageOptions: {
       parser: tsparser,
       parserOptions: {
+        // Anchor project discovery at the repo root so per-package eslint
+        // invocations resolve `./packages/*/tsconfig.json` correctly even
+        // when CWD is `packages/core` or `packages/cli`.
         project: ['./packages/*/tsconfig.json'],
+        tsconfigRootDir,
       },
     },
     plugins: {
