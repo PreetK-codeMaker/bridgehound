@@ -35,8 +35,13 @@ export interface BridgeSend {
   srcChain: ChainId
   /** Destination chain. */
   dstChain: ChainId
-  /** Recipient on the destination chain. */
-  recipient: Address
+  /**
+   * Recipient on the destination chain. Optional because some bridges
+   * (Stargate's OFT, for one) hide the recipient inside the LayerZero message
+   * payload rather than in the source-side event, so we can't fill it in
+   * without an extra decode step. Consumers must guard against `undefined`.
+   */
+  recipient?: Address
   /** Token being bridged. */
   token: TokenInfo
   /** Amount in token's smallest unit (wei for ETH, etc.). */
@@ -46,6 +51,14 @@ export interface BridgeSend {
    * Present when the bridge protocol exposes one. Enables exact matching.
    */
   messageId?: string
+  /**
+   * The bridge contract on the source chain that emitted the send event. Set
+   * when the bridge contract is per-token (Hop, Stargate OFT) and we can't
+   * cheaply resolve the underlying ERC-20 from the event alone. Distinct from
+   * `token.address` so downstream consumers don't confuse the bridge contract
+   * with the actual token being transferred.
+   */
+  sourceContract?: Address
   /** Source-chain timestamp of the deposit, used to bound destination search. */
   timestamp: number
   /** Expected delivery delay range in seconds [min, max]. */
@@ -75,6 +88,7 @@ export interface TraceNode {
   bridge?: {
     name: string
     messageId?: string
+    sourceContract?: Address
   }
   /** Destination-chain transactions, when this was a bridge send. */
   children: TraceNode[]

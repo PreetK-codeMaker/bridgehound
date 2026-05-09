@@ -3,26 +3,13 @@ import { decodeEventLog, encodeEventTopics } from 'viem'
 import { fetchTx } from '../../chains/fetchTx.js'
 import type { BridgeSend, ChainId, NormalizedTx, TokenInfo } from '../../types.js'
 import { BridgeDecodeError } from '../../utils/errors.js'
+import { DESTINATION_LOOKBACK_BLOCKS } from '../lookback.js'
 import type { AdapterContext, BridgeAdapter } from '../types.js'
 import { FILLED_RELAY_EVENT, FUNDS_DEPOSITED_EVENT } from './abi.js'
 import { SPOKE_POOL } from './addresses.js'
 import { bytes32ToAddress } from './codec.js'
 
 const BRIDGE_NAME = 'across'
-
-/**
- * How far back to scan for FilledRelay events on the destination chain.
- * Across fills typically arrive within minutes; multiplying that by chain
- * block rate gives a generous-but-bounded window. Pick L1-block-rate as a
- * conservative default for unknown chains.
- */
-const DESTINATION_LOOKBACK_BLOCKS: Record<ChainId, bigint> = {
-  1: 50_000n, // ~7 days at 12s blocks
-  10: 5_000_000n, // ~58 days at 1s blocks (Optimism)
-  137: 2_000_000n, // ~52 days at 2.2s blocks
-  8453: 5_000_000n, // ~58 days at 1s blocks
-  42161: 20_000_000n, // ~58 days at 0.25s blocks
-}
 
 class AcrossAdapter implements BridgeAdapter {
   readonly name = BRIDGE_NAME
@@ -63,7 +50,9 @@ class AcrossAdapter implements BridgeAdapter {
     if (decoded.eventName !== 'FundsDeposited') return null
     const args = decoded.args as Record<string, unknown>
 
-    const dstChain = Number(args['destinationChainId'] as bigint)
+    const rawDstChain = args['destinationChainId'] as bigint
+    if (rawDstChain > BigInt(Number.MAX_SAFE_INTEGER)) return null
+    const dstChain = Number(rawDstChain)
     const inputAmount = args['inputAmount'] as bigint
     const depositId = args['depositId'] as bigint
 

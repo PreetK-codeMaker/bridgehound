@@ -93,7 +93,11 @@ async function traceFrom(
     ...baseNode,
     token: send.token,
     amount: send.amount,
-    bridge: { name: adapter.name, ...(send.messageId ? { messageId: send.messageId } : {}) },
+    bridge: {
+      name: adapter.name,
+      ...(send.messageId ? { messageId: send.messageId } : {}),
+      ...(send.sourceContract ? { sourceContract: send.sourceContract } : {}),
+    },
   }
 
   const destTx = await adapter.findDestination(send, ctx)
