@@ -5,6 +5,17 @@ import ora from 'ora'
 import { trace, type TraceStats } from 'bridgehound'
 import { renderTree } from './render-tree.js'
 
+// Public RPC fallbacks. Free, no key, rate-limited. Declared before
+// cli.parse() so the action body — which can fire synchronously inside
+// parse() — doesn't trip the const TDZ.
+const PUBLIC_RPCS: Record<number, string> = {
+  1: 'https://ethereum-rpc.publicnode.com',
+  10: 'https://optimism-rpc.publicnode.com',
+  137: 'https://polygon-bor-rpc.publicnode.com',
+  8453: 'https://mainnet.base.org',
+  42161: 'https://arbitrum-one-rpc.publicnode.com',
+}
+
 const cli = cac('bridgehound')
 
 cli
@@ -25,6 +36,17 @@ cli
         return
       }
 
+      let providers: Record<number, string>
+      let source: string
+      try {
+        ;({ providers, source } = getProviders())
+      } catch (err) {
+        console.error(kleur.red(err instanceof Error ? err.message : String(err)))
+        process.exitCode = 1
+        return
+      }
+      console.error(kleur.dim(`Using ${source} RPCs.`))
+
       const spinner = ora('Tracing...').start()
       try {
         const result = await trace(
@@ -33,9 +55,7 @@ cli
             startChain: chain,
             maxDepth: depth,
           },
-          {
-            providers: getAlchemyProviders(),
-          },
+          { providers },
         )
         spinner.succeed('Trace complete')
 
@@ -66,11 +86,7 @@ function parsePositiveInt(raw: string, flag: string): number {
   return n
 }
 
-function getAlchemyProviders(): Record<number, string> {
-  const key = process.env.ALCHEMY_API_KEY
-  if (!key) {
-    throw new Error('ALCHEMY_API_KEY environment variable is required')
-  }
+function alchemyProviders(key: string): Record<number, string> {
   return {
     1: `https://eth-mainnet.g.alchemy.com/v2/${key}`,
     10: `https://opt-mainnet.g.alchemy.com/v2/${key}`,
@@ -78,6 +94,58 @@ function getAlchemyProviders(): Record<number, string> {
     8453: `https://base-mainnet.g.alchemy.com/v2/${key}`,
     42161: `https://arb-mainnet.g.alchemy.com/v2/${key}`,
   }
+}
+
+/**
+ * Parse RPC_URLS env var: "chainId=url,chainId=url". Returns per-chain
+ * overrides that take precedence over Alchemy and public defaults.
+ */
+function parseRpcUrls(raw: string | undefined): Record<number, string> {
+  if (!raw) return {}
+  const out: Record<number, string> = {}
+  for (const entry of raw.split(',')) {
+    if (!entry.trim()) continue
+    const eq = entry.indexOf('=')
+    if (eq < 0) {
+      throw new Error(`RPC_URLS entry "${entry}" must be "chainId=url"`)
+    }
+    const chainId = entry.slice(0, eq).trim()
+    const url = entry.slice(eq + 1).trim()
+    if (!chainId || !url) {
+      throw new Error(`RPC_URLS entry "${entry}" must be "chainId=url"`)
+    }
+    const id = Number(chainId)
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new Error(`RPC_URLS chainId "${chainId}" must be a positive integer`)
+    }
+    out[id] = url
+  }
+  return out
+}
+
+/**
+ * Resolve RPCs per chain. Precedence: RPC_URLS overrides → Alchemy (if key)
+ * → public fallback. Chains can be mixed: `RPC_URLS=1=quicknode-url` plus
+ * `ALCHEMY_API_KEY=…` uses QuickNode for chain 1 and Alchemy for the rest.
+ */
+function getProviders(): { providers: Record<number, string>; source: string } {
+  const overrides = parseRpcUrls(process.env.RPC_URLS)
+  const key = process.env.ALCHEMY_API_KEY
+  const base = key ? alchemyProviders(key) : PUBLIC_RPCS
+  const providers = { ...base, ...overrides }
+
+  const overrideCount = Object.keys(overrides).length
+  let source: string
+  if (overrideCount > 0 && key) {
+    source = `Alchemy with ${overrideCount} RPC_URLS override(s)`
+  } else if (overrideCount > 0) {
+    source = `public + ${overrideCount} RPC_URLS override(s)`
+  } else if (key) {
+    source = 'Alchemy'
+  } else {
+    source = 'public (rate-limited; set ALCHEMY_API_KEY or RPC_URLS for better limits)'
+  }
+  return { providers, source }
 }
 
 function bigintReplacer(_key: string, value: unknown): unknown {
